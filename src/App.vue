@@ -4,15 +4,20 @@
       <v-list>
         <v-list-item title="ADO User Stories" subtitle="SOP"></v-list-item>
         <v-divider></v-divider>
-        <v-list-item
-          v-for="item in items"
-          :key="item.title"
-          :value="item.value"
-          @click="scrollTo(item.value)"
-          link
-        >
-          <v-list-item-title>{{ item.title }}</v-list-item-title>
-        </v-list-item>
+        <template v-for="(item, index) in items" :key="index">
+          <v-divider v-if="item.type === 'divider'"></v-divider>
+          <v-list-item
+            v-else
+            :value="item.value"
+            @click="handleNavigation(item)"
+            link
+          >
+            <template v-slot:prepend v-if="item.icon">
+              <v-icon :icon="item.icon"></v-icon>
+            </template>
+            <v-list-item-title>{{ item.title }}</v-list-item-title>
+          </v-list-item>
+        </template>
       </v-list>
     </v-navigation-drawer>
 
@@ -22,7 +27,8 @@
     </v-app-bar>
 
     <v-main>
-      <v-container>
+      <UserStoryCreator v-if="currentView === 'create'" />
+      <v-container v-else>
          <div id="dor" class="mb-10">
            <DefinitionOfReady />
          </div>
@@ -44,15 +50,20 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import DefinitionOfReady from './components/DefinitionOfReady.vue'
 import TemplateBreakdown from './components/TemplateBreakdown.vue'
 import BannedWords from './components/BannedWords.vue'
 import OfficialTemplates from './components/OfficialTemplates.vue'
 import HowToSave from './components/HowToSave.vue'
+import UserStoryCreator from './components/UserStoryCreator.vue'
 
 const drawer = ref(true)
+const currentView = ref('sop')
+
 const items = [
+  { title: 'Create User Story', value: 'create', icon: 'mdi-plus-box' },
+  { type: 'divider' },
   { title: 'Definition of Ready', value: 'dor' },
   { title: 'Template Breakdown', value: 'breakdown' },
   { title: 'Banned Words', value: 'banned' },
@@ -60,10 +71,16 @@ const items = [
   { title: 'How to Save', value: 'howtosave' },
 ]
 
-function scrollTo(id) {
-  const el = document.getElementById(id)
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth' })
+async function handleNavigation(item) {
+  if (item.value === 'create') {
+    currentView.value = 'create'
+  } else {
+    currentView.value = 'sop'
+    await nextTick()
+    const el = document.getElementById(item.value)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' })
+    }
   }
 }
 </script>
