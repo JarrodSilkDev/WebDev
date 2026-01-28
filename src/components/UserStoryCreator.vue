@@ -290,10 +290,27 @@
             title="Improvements Needed"
             class="mt-4"
           >
-             <div v-if="report.isAI" class="markdown-body">
-               <!-- Simple formatting for AI response -->
+             <!-- AI Segmented Report -->
+             <div v-if="report.isAI && report.isSegmented">
+               <v-divider class="mb-2"></v-divider>
+               <h4 class="text-subtitle-1 font-weight-bold">Title Analysis</h4>
+               <div class="mb-2 text-body-2" style="white-space: pre-wrap;">{{ report.titleResult }}</div>
+
+               <v-divider class="mb-2"></v-divider>
+               <h4 class="text-subtitle-1 font-weight-bold">Description Analysis</h4>
+               <div class="mb-2 text-body-2" style="white-space: pre-wrap;">{{ report.descResult }}</div>
+
+               <v-divider class="mb-2"></v-divider>
+               <h4 class="text-subtitle-1 font-weight-bold">Acceptance Criteria Analysis</h4>
+               <div class="mb-2 text-body-2" style="white-space: pre-wrap;">{{ report.acResult }}</div>
+             </div>
+
+             <!-- AI Legacy/Error Report -->
+             <div v-else-if="report.isAI" class="markdown-body">
                <div style="white-space: pre-wrap;">{{ report.text }}</div>
              </div>
+
+             <!-- Rules Validator Report -->
              <ul v-else class="ml-4">
               <li v-for="(issue, idx) in report.issues" :key="idx">
                 {{ issue }}
@@ -329,6 +346,9 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { CreateMLCEngine } from "@mlc-ai/web-llm"
+import { getTitlePrompt } from '../prompts/validateTitle'
+import { getDescriptionPrompt } from '../prompts/validateDescription'
+import { getACPrompt } from '../prompts/validateAC'
 
 const form = reactive({
   title: '',
@@ -436,58 +456,60 @@ async function validate() {
 async function validateWithAI() {
   if (!aiEngine.value) return
 
-  report.value = { valid: false, isAI: true, text: "Analyzing..." }
-
-  const prompt = `
-You are an expert Agile Coach validating a User Story against a strict Standard Operating Procedure (SOP).
-
-SOP Rules:
-1. Title Format: [Component/Area] - [Action] - [Short Context]
-2. Narrative Format: As a [Specific Persona] I want to [Action] So that [Benefit/Value]. (Never use "As a User").
-3. Banned Words: Fast (use ms), Easy (use clicks), Modern, Robust, Bug-free.
-4. Acceptance Criteria: Must use Gherkin (Given / When / Then). Must have at least one Happy Path and one Negative Path.
-
-User Story to Validate:
-Title: ${form.title}
-Narrative: ${form.narrative}
-Context: ${form.context}
-Business Rules: ${form.rules}
-Assets: ${form.assets}
-Out of Scope: ${form.outOfScope}
-Happy Path: ${form.happyPath}
-Negative Path: ${form.negativePath}
-
-Instructions:
-Critique the User Story based on the SOP.
-If it is perfect, start with "Validation Passed".
-Otherwise, provide a bulleted list of specific improvements needed.
-`
+  // Reset report
+  report.value = {
+    valid: false,
+    isAI: true,
+    isSegmented: true,
+    titleResult: "Analyzing...",
+    descResult: "Pending...",
+    acResult: "Pending..."
+  }
 
   try {
-    const messages = [
-      { role: "system", content: "You are a helpful Agile Coach." },
-      { role: "user", content: prompt }
-    ]
-
-    const completion = await aiEngine.value.chat.completions.create({
-      messages,
-      temperature: 0.1, // Low temp for more deterministic evaluation
+    // 1. Validate Title
+    const titlePrompt = getTitlePrompt(form.title)
+    let completion = await aiEngine.value.chat.completions.create({
+      messages: [{ role: "user", content: titlePrompt }],
+      temperature: 0.1,
     })
+    const titleResponse = completion.choices[0].message.content
+    report.value.titleResult = titleResponse
+    report.value.descResult = "Analyzing..."
 
-    const response = completion.choices[0].message.content
-    const passed = response.toLowerCase().includes("validation passed")
+    // 2. Validate Description
+    const descPrompt = getDescriptionPrompt(form)
+    completion = await aiEngine.value.chat.completions.create({
+      messages: [{ role: "user", content: descPrompt }],
+      temperature: 0.1,
+    })
+    const descResponse = completion.choices[0].message.content
+    report.value.descResult = descResponse
+    report.value.acResult = "Analyzing..."
 
-    report.value = {
-      valid: passed,
-      isAI: true,
-      text: response
-    }
-    isValidated.value = passed
+    // 3. Validate AC
+    const acPrompt = getACPrompt(form)
+    completion = await aiEngine.value.chat.completions.create({
+      messages: [{ role: "user", content: acPrompt }],
+      temperature: 0.1,
+    })
+    const acResponse = completion.choices[0].message.content
+    report.value.acResult = acResponse
+
+    // Check overall status
+    const tPassed = titleResponse.toLowerCase().includes("validation passed")
+    const dPassed = descResponse.toLowerCase().includes("validation passed")
+    const aPassed = acResponse.toLowerCase().includes("validation passed")
+    const allPassed = tPassed && dPassed && aPassed
+
+    report.value.valid = allPassed
+    isValidated.value = allPassed
 
   } catch (err) {
     report.value = {
       valid: false,
       isAI: true,
+      isSegmented: false,
       text: "Error running AI validation: " + err.message
     }
   }
