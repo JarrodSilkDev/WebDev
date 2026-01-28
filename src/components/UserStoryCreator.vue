@@ -192,14 +192,56 @@
     <!-- Actions -->
     <v-row class="mt-6">
       <v-col cols="12">
+        <div class="d-flex align-center mb-4">
+           <v-switch
+             v-model="useAI"
+             color="primary"
+             label="Use AI Assistant (Browser-based LLM)"
+             hide-details
+             class="mr-4"
+           ></v-switch>
+        </div>
+
+        <div v-if="useAI && !isModelLoaded" class="mb-4">
+           <v-alert
+             type="info"
+             variant="tonal"
+             class="mb-2"
+             title="Download Required"
+           >
+             The AI model ({{ selectedModel }}) will run entirely in your browser.
+             First load requires downloading ~2.3GB of data.
+             This requires a device with a GPU supporting WebGPU.
+           </v-alert>
+
+           <v-btn
+             :loading="isModelLoading"
+             color="primary"
+             prepend-icon="mdi-download"
+             @click="loadModel"
+           >
+             Load AI Model
+           </v-btn>
+
+           <div v-if="aiLoadProgress" class="text-caption mt-2 text-primary font-weight-bold">
+             {{ aiLoadProgress }}
+           </div>
+
+           <v-alert v-if="aiError" type="error" class="mt-2" title="Error">
+             {{ aiError }}
+           </v-alert>
+        </div>
+
         <v-btn
           color="primary"
           size="large"
           prepend-icon="mdi-check-circle"
           @click="validate"
           class="mr-4"
+          :loading="isModelLoading && useAI"
+          :disabled="useAI && !isModelLoaded"
         >
-          Validate
+          {{ useAI ? 'Validate with AI' : 'Validate Rules' }}
         </v-btn>
 
         <v-btn
@@ -248,7 +290,11 @@
             title="Improvements Needed"
             class="mt-4"
           >
-            <ul class="ml-4">
+             <div v-if="report.isAI" class="markdown-body">
+               <!-- Simple formatting for AI response -->
+               <div style="white-space: pre-wrap;">{{ report.text }}</div>
+             </div>
+             <ul v-else class="ml-4">
               <li v-for="(issue, idx) in report.issues" :key="idx">
                 {{ issue }}
               </li>
@@ -282,6 +328,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
+import { CreateMLCEngine } from "@mlc-ai/web-llm"
 
 const form = reactive({
   title: '',
@@ -299,6 +346,16 @@ const currentGuideline = ref(null)
 const report = ref(null)
 const isValidated = ref(false)
 const snackbar = ref(false)
+
+// AI State
+const useAI = ref(false)
+const isModelLoading = ref(false)
+const isModelLoaded = ref(false)
+const aiLoadProgress = ref('')
+const aiEngine = ref(null)
+const aiError = ref(null)
+
+const selectedModel = "Phi-3-mini-4k-instruct-q4f16_1-MLC"
 
 const guidelines = {
   title: {
@@ -348,7 +405,95 @@ const bannedWords = [
   { word: 'Bug-free', reason: 'Impossible.' }
 ]
 
-function validate() {
+async function loadModel() {
+  isModelLoading.value = true
+  aiError.value = null
+  try {
+    const initProgressCallback = (report) => {
+      aiLoadProgress.value = report.text
+    }
+    aiEngine.value = await CreateMLCEngine(
+      selectedModel,
+      { initProgressCallback }
+    )
+    isModelLoaded.value = true
+  } catch (err) {
+    console.error(err)
+    aiError.value = "Failed to load model. Ensure your browser supports WebGPU. Error: " + err.message
+  } finally {
+    isModelLoading.value = false
+  }
+}
+
+async function validate() {
+  if (useAI.value) {
+    await validateWithAI()
+  } else {
+    validateRules()
+  }
+}
+
+async function validateWithAI() {
+  if (!aiEngine.value) return
+
+  report.value = { valid: false, isAI: true, text: "Analyzing..." }
+
+  const prompt = `
+You are an expert Agile Coach validating a User Story against a strict Standard Operating Procedure (SOP).
+
+SOP Rules:
+1. Title Format: [Component/Area] - [Action] - [Short Context]
+2. Narrative Format: As a [Specific Persona] I want to [Action] So that [Benefit/Value]. (Never use "As a User").
+3. Banned Words: Fast (use ms), Easy (use clicks), Modern, Robust, Bug-free.
+4. Acceptance Criteria: Must use Gherkin (Given / When / Then). Must have at least one Happy Path and one Negative Path.
+
+User Story to Validate:
+Title: ${form.title}
+Narrative: ${form.narrative}
+Context: ${form.context}
+Business Rules: ${form.rules}
+Assets: ${form.assets}
+Out of Scope: ${form.outOfScope}
+Happy Path: ${form.happyPath}
+Negative Path: ${form.negativePath}
+
+Instructions:
+Critique the User Story based on the SOP.
+If it is perfect, start with "Validation Passed".
+Otherwise, provide a bulleted list of specific improvements needed.
+`
+
+  try {
+    const messages = [
+      { role: "system", content: "You are a helpful Agile Coach." },
+      { role: "user", content: prompt }
+    ]
+
+    const completion = await aiEngine.value.chat.completions.create({
+      messages,
+      temperature: 0.1, // Low temp for more deterministic evaluation
+    })
+
+    const response = completion.choices[0].message.content
+    const passed = response.toLowerCase().includes("validation passed")
+
+    report.value = {
+      valid: passed,
+      isAI: true,
+      text: response
+    }
+    isValidated.value = passed
+
+  } catch (err) {
+    report.value = {
+      valid: false,
+      isAI: true,
+      text: "Error running AI validation: " + err.message
+    }
+  }
+}
+
+function validateRules() {
   const issues = []
 
   // Title Check
@@ -392,11 +537,7 @@ function validate() {
     isValidated.value = true
   } else {
     report.value = { valid: false, issues }
-    isValidated.value = false // Require re-validation? The spec implies "Validate" tells where to make improvements.
-    // If we want to allow copying even if invalid, we'd remove :disabled from buttons.
-    // But spec says "Once completed... click Validate... (get feedback)... (then) Copy"
-    // Usually implies Validation is a gate. But if the user ignores advice, maybe they should be allowed.
-    // I will enable buttons only if valid to enforce "DoR".
+    isValidated.value = false
   }
 }
 
